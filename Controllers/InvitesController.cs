@@ -19,6 +19,23 @@ public class InvitesController : ControllerBase
         _logger = logger;
     }
 
+    [HttpGet]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(IReadOnlyList<InviteResponse>))]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ListPendingInvites(Guid orgId, CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(new { error = "Invalid user identity" });
+        }
+
+        var invites = await _invitesService.ListPendingInvitesAsync(orgId, userId, cancellationToken);
+        return Ok(invites);
+    }
+
     [HttpPost]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status201Created, Type = typeof(InviteResponse))]
@@ -102,6 +119,30 @@ public class InvitesController : ControllerBase
         }
 
         return Ok(new { message = "Invite resent successfully" });
+    }
+
+    [HttpDelete("{inviteId}")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RevokeInvite(Guid orgId, Guid inviteId, CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(new { error = "Invalid user identity" });
+        }
+
+        var result = await _invitesService.RevokeInviteAsync(orgId, userId, inviteId, cancellationToken);
+
+        if (!result)
+        {
+            return NotFound(new { error = "Invite not found, access denied, or already accepted" });
+        }
+
+        return NoContent();
     }
 }
 

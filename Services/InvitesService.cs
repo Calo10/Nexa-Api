@@ -81,6 +81,36 @@ public class InvitesService : IInvitesService
         };
     }
 
+    public async Task<IReadOnlyList<InviteResponse>> ListPendingInvitesAsync(
+        Guid orgId,
+        Guid requesterUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var membership = await _orgRepository.GetMembershipAsync(orgId, requesterUserId, cancellationToken);
+        if (membership is null)
+        {
+            _logger.LogWarning("User {UserId} attempted to list invites for org {OrgId} without membership", requesterUserId, orgId);
+            return [];
+        }
+
+        if (membership.Role is not ("owner" or "admin"))
+        {
+            _logger.LogWarning("User {UserId} attempted to list invites for org {OrgId} without owner/admin role", requesterUserId, orgId);
+            return [];
+        }
+
+        var invites = await _orgRepository.ListPendingInvitesByOrgAsync(orgId, cancellationToken);
+        return invites.Select(invite => new InviteResponse
+        {
+            InviteId = invite.Id,
+            Email = invite.Email,
+            Role = invite.Role,
+            ExpiresAt = invite.ExpiresAt,
+            CreatedAt = invite.CreatedAt,
+            Status = "pending"
+        }).ToList();
+    }
+
     public async Task<bool> AcceptInviteAsync(string token, CancellationToken cancellationToken = default)
     {
         // Validate token
@@ -217,5 +247,27 @@ public class InvitesService : IInvitesService
         _logger.LogInformation("Invite {InviteId} resent. New token expires at {ExpiresAt}", inviteId, expiresAt);
 
         return true;
+    }
+
+    public async Task<bool> RevokeInviteAsync(Guid orgId, Guid requesterUserId, Guid inviteId, CancellationToken cancellationToken = default)
+    {
+        var membership = await _orgRepository.GetMembershipAsync(orgId, requesterUserId, cancellationToken);
+        if (membership is null)
+        {
+            _logger.LogWarning("User {UserId} attempted to revoke invite {InviteId} without membership", requesterUserId, inviteId);
+            return false;
+        }
+
+        if (membership.Role is not ("owner" or "admin"))
+        {
+            _logger.LogWarning("User {UserId} attempted to revoke invite {InviteId} without owner/admin role", requesterUserId, inviteId);
+            return false;
+        }
+
+        var revoked = await _orgRepository.RevokePendingInviteAsync(orgId, inviteId, cancellationToken);
+        if (revoked)
+            _logger.LogInformation("Invite {InviteId} revoked for org {OrgId}", inviteId, orgId);
+
+        return revoked;
     }
 }

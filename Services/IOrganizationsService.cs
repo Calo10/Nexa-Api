@@ -4,6 +4,13 @@ namespace NexaApi.Services;
 
 public interface IOrganizationsService
 {
+    Task<ProvisionOrganizationResponse?> ProvisionOrganizationAsync(
+        string name,
+        string timezone,
+        string adminEmail,
+        string? adminFullName,
+        CancellationToken cancellationToken = default);
+
     Task<OrganizationResponse?> CreateOrganizationAsync(string name, string timezone, Guid ownerUserId, CancellationToken cancellationToken = default);
     Task<List<OrganizationResponse>> ListOrganizationsAsync(Guid userId, CancellationToken cancellationToken = default);
     Task<OrganizationDetailResponse?> GetOrganizationAsync(Guid orgId, Guid userId, CancellationToken cancellationToken = default);

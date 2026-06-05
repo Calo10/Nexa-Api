@@ -5,7 +5,9 @@ namespace NexaApi.Services;
 public interface IInvitesService
 {
     Task<InviteResponse?> SendInviteAsync(Guid orgId, Guid inviterUserId, string email, string role, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<InviteResponse>> ListPendingInvitesAsync(Guid orgId, Guid requesterUserId, CancellationToken cancellationToken = default);
     Task<bool> AcceptInviteAsync(string token, CancellationToken cancellationToken = default);
     Task<bool> ResendInviteAsync(Guid orgId, Guid userId, Guid inviteId, CancellationToken cancellationToken = default);
+    Task<bool> RevokeInviteAsync(Guid orgId, Guid requesterUserId, Guid inviteId, CancellationToken cancellationToken = default);
 }
 
