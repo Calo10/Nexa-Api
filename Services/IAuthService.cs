@@ -4,7 +4,10 @@ namespace NexaApi.Services;
 
 public interface IAuthService
 {
-    Task<MagicLinkResponse> SendMagicLinkAsync(string email, CancellationToken cancellationToken = default);
+    Task<MagicLinkResponse> SendMagicLinkAsync(
+        string email,
+        string? callbackUrl = null,
+        CancellationToken cancellationToken = default);
     Task<AuthResponse?> ConsumeTokenAsync(string token, string? userAgent, string? ip, CancellationToken cancellationToken = default);
     Task<AuthResponse?> LoginWithPasswordAsync(string email, string password, string? userAgent, string? ip, CancellationToken cancellationToken = default);
     Task SetPasswordAsync(Guid userId, string newPassword, CancellationToken cancellationToken = default);

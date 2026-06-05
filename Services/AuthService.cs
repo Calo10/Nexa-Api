@@ -34,7 +34,10 @@ public class AuthService : IAuthService
         _logger = logger;
     }
 
-    public async Task<MagicLinkResponse> SendMagicLinkAsync(string email, CancellationToken cancellationToken = default)
+    public async Task<MagicLinkResponse> SendMagicLinkAsync(
+        string email,
+        string? callbackUrl = null,
+        CancellationToken cancellationToken = default)
     {
         // Normalize email
         var normalizedEmail = email.ToLowerInvariant().Trim();
@@ -62,8 +65,12 @@ public class AuthService : IAuthService
         // Send email with raw token (do NOT store raw token)
         try
         {
-            await _emailService.SendMagicLinkAsync(email, rawToken, cancellationToken);
-            _logger.LogInformation("Magic link email sent to {Email}. Token expires at {ExpiresAt}", email, expiresAt);
+            await _emailService.SendMagicLinkAsync(email, rawToken, callbackUrl, cancellationToken);
+            _logger.LogInformation(
+                "Magic link email sent to {Email}. CallbackUrl={CallbackUrl} Token expires at {ExpiresAt}",
+                email,
+                string.IsNullOrWhiteSpace(callbackUrl) ? "(default Frontend:BaseUrl)" : callbackUrl.Trim(),
+                expiresAt);
         }
         catch (Exception ex)
         {

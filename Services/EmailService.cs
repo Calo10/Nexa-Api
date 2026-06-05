@@ -37,11 +37,15 @@ public class EmailService : IEmailService
             ?? "http://localhost:5173"; // Default frontend port (Vite)
     }
 
-    public async Task SendMagicLinkAsync(string toEmail, string magicLinkToken, CancellationToken cancellationToken = default)
+    public async Task SendMagicLinkAsync(
+        string toEmail,
+        string magicLinkToken,
+        string? callbackUrl = null,
+        CancellationToken cancellationToken = default)
     {
         // Build magic link URL - points to frontend that will call the API
         // The frontend will extract the token and call POST /v1/auth/consume
-        var magicLinkUrl = $"{_frontendUrl}/auth/verify?token={Uri.EscapeDataString(magicLinkToken)}";
+        var magicLinkUrl = BuildMagicLinkUrl(magicLinkToken, callbackUrl);
 
         var subject = "Sign in to Nexa";
         var plainTextContent = $"Click this link to sign in to Nexa: {magicLinkUrl}\n\nThis link will expire in 15 minutes.";
@@ -77,6 +81,20 @@ public class EmailService : IEmailService
             emailType: "password-reset",
             cancellationToken: cancellationToken
         );
+    }
+
+    private string BuildMagicLinkUrl(string magicLinkToken, string? callbackUrl)
+    {
+        var tokenParam = $"token={Uri.EscapeDataString(magicLinkToken)}";
+        if (!string.IsNullOrWhiteSpace(callbackUrl))
+        {
+            var baseUrl = callbackUrl.Trim();
+            return baseUrl.Contains('?', StringComparison.Ordinal)
+                ? $"{baseUrl}&{tokenParam}"
+                : $"{baseUrl}?{tokenParam}";
+        }
+
+        return $"{_frontendUrl}/auth/verify?{tokenParam}";
     }
 
     private async Task SendEmailViaMessengerFunctionAsync(
