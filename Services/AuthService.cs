@@ -13,6 +13,7 @@ public class AuthService : IAuthService
     private readonly IFeaturesService _featuresService;
     private readonly IJwtTokenService _jwtTokenService;
     private readonly IEmailService _emailService;
+    private readonly IInvitesService _invitesService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthService> _logger;
 
@@ -22,6 +23,7 @@ public class AuthService : IAuthService
         IFeaturesService featuresService,
         IJwtTokenService jwtTokenService,
         IEmailService emailService,
+        IInvitesService invitesService,
         IConfiguration configuration,
         ILogger<AuthService> logger)
     {
@@ -30,6 +32,7 @@ public class AuthService : IAuthService
         _featuresService = featuresService;
         _jwtTokenService = jwtTokenService;
         _emailService = emailService;
+        _invitesService = invitesService;
         _configuration = configuration;
         _logger = logger;
     }
@@ -137,7 +140,8 @@ public class AuthService : IAuthService
         // Consume magic link
         await _authRepository.ConsumeMagicLinkAsync(magicLink.Id, cancellationToken: cancellationToken);
 
-        // Reuse the same token issuance logic
+        await TryAcceptPendingInvitesAsync(userId, user, cancellationToken);
+
         return await IssueAuthResponseAsync(userId, user, userAgent, ip, cancellationToken);
     }
 
@@ -208,7 +212,8 @@ public class AuthService : IAuthService
         await _authRepository.ResetFailedLoginCountAsync(user.Id, cancellationToken: cancellationToken);
         _logger.LogInformation("Successful password login for user {UserId}", user.Id);
 
-        // Reuse the same token issuance logic as ConsumeTokenAsync
+        await TryAcceptPendingInvitesAsync(user.Id, user, cancellationToken);
+
         return await IssueAuthResponseAsync(user.Id, user, userAgent, ip, cancellationToken);
     }
 
@@ -457,6 +462,26 @@ public class AuthService : IAuthService
         await _authRepository.ConsumePasswordResetTokenAsync(resetToken.Id, cancellationToken: cancellationToken);
 
         _logger.LogInformation("Password reset completed successfully for user {UserId}", user.Id);
+    }
+
+    private async Task TryAcceptPendingInvitesAsync(Guid userId, UserRecord user, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var accepted = await _invitesService.AcceptPendingInvitesForUserAsync(userId, user.Email, cancellationToken);
+            if (accepted > 0)
+            {
+                _logger.LogInformation(
+                    "Auto-accepted {Count} pending org invite(s) for user {UserId} ({Email})",
+                    accepted,
+                    userId,
+                    user.Email);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to auto-accept pending invites for user {UserId}", userId);
+        }
     }
 
     private async Task<AuthResponse> IssueAuthResponseAsync(Guid userId, UserRecord user, string? userAgent, string? ip, CancellationToken cancellationToken)

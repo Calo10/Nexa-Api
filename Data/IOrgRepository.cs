@@ -20,6 +20,7 @@ public interface IOrgRepository
     Task<Guid> CreateInviteAsync(Guid orgId, string email, string role, Guid invitedByUserId, string tokenHash, DateTimeOffset expiresAt, IDbTransaction? transaction = null, CancellationToken cancellationToken = default);
     Task<InviteRecord?> GetInviteByTokenHashAsync(string tokenHash, CancellationToken cancellationToken = default);
     Task<List<InviteRecord>> ListPendingInvitesByOrgAsync(Guid orgId, CancellationToken cancellationToken = default);
+    Task<List<InviteRecord>> ListPendingInvitesByEmailAsync(string emailNormalized, CancellationToken cancellationToken = default);
     Task AcceptInviteAsync(Guid inviteId, IDbTransaction? transaction = null, CancellationToken cancellationToken = default);
     Task ResendInviteAsync(Guid inviteId, string newTokenHash, DateTimeOffset newExpiresAt, IDbTransaction? transaction = null, CancellationToken cancellationToken = default);
     Task<bool> RevokePendingInviteAsync(Guid orgId, Guid inviteId, CancellationToken cancellationToken = default);

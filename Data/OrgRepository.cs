@@ -388,6 +388,38 @@ public class OrgRepository : IOrgRepository
         return result.ToList();
     }
 
+    public async Task<List<InviteRecord>> ListPendingInvitesByEmailAsync(string emailNormalized, CancellationToken cancellationToken = default)
+    {
+        var now = Sql.UtcNow;
+        var normalized = emailNormalized.ToLowerInvariant().Trim();
+
+        const string sql = @"
+            SELECT
+                id AS Id,
+                org_id AS OrgId,
+                email AS Email,
+                email_normalized AS EmailNormalized,
+                role AS Role,
+                invited_by_user_id AS InvitedByUserId,
+                token_hash AS TokenHash,
+                expires_at AS ExpiresAt,
+                accepted_at AS AcceptedAt,
+                created_at AS CreatedAt
+            FROM org_invites
+            WHERE email_normalized = @EmailNormalized
+              AND accepted_at IS NULL
+              AND expires_at > @Now
+            ORDER BY created_at DESC";
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+
+        var result = await connection.QueryAsync<InviteRecord>(
+            new CommandDefinition(sql, new { EmailNormalized = normalized, Now = now }, cancellationToken: cancellationToken));
+
+        return result.ToList();
+    }
+
     public async Task<bool> RevokePendingInviteAsync(Guid orgId, Guid inviteId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
