@@ -46,7 +46,8 @@ public class AuthController : ControllerBase
 
         try
         {
-            var result = await _authService.SendMagicLinkAsync(request.Email, cancellationToken);
+            var callbackUrl = string.IsNullOrWhiteSpace(request.CallbackUrl) ? null : request.CallbackUrl.Trim();
+            var result = await _authService.SendMagicLinkAsync(request.Email, callbackUrl, cancellationToken);
 
             if (!result.Success)
             {

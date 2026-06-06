@@ -25,11 +25,100 @@ public class OrganizationsService : IOrganizationsService
         _logger = logger;
     }
 
+    public async Task<ProvisionOrganizationResponse?> ProvisionOrganizationAsync(
+        string name,
+        string timezone,
+        string adminEmail,
+        string? adminFullName,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedEmail = adminEmail.ToLowerInvariant().Trim();
+        var emailForStorage = adminEmail.Trim();
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            var existingUser = await _authRepository.GetUserByEmailAsync(normalizedEmail, transaction, cancellationToken);
+            Guid adminUserId;
+            var adminUserCreated = false;
+            string? resolvedFullName;
+
+            if (existingUser == null)
+            {
+                adminUserId = await _authRepository.CreateUserAsync(
+                    emailForStorage,
+                    string.IsNullOrWhiteSpace(adminFullName) ? null : adminFullName.Trim(),
+                    transaction,
+                    cancellationToken);
+                adminUserCreated = true;
+                resolvedFullName = string.IsNullOrWhiteSpace(adminFullName) ? null : adminFullName.Trim();
+            }
+            else
+            {
+                if (existingUser.Status == "disabled")
+                {
+                    _logger.LogWarning("Provision blocked: admin user {Email} is disabled", emailForStorage);
+                    return null;
+                }
+
+                adminUserId = existingUser.Id;
+                resolvedFullName = existingUser.FullName ?? (string.IsNullOrWhiteSpace(adminFullName) ? null : adminFullName.Trim());
+            }
+
+            var baseSlug = GenerateSlug(name);
+            var slug = await EnsureUniqueSlugAsync(baseSlug, transaction, cancellationToken);
+
+            var orgId = await _orgRepository.CreateOrganizationAsync(
+                name,
+                slug,
+                timezone,
+                adminUserId,
+                transaction,
+                cancellationToken);
+
+            transaction.Commit();
+
+            var org = await _orgRepository.GetOrganizationAsync(orgId, cancellationToken);
+            if (org == null)
+            {
+                return null;
+            }
+
+            _logger.LogInformation(
+                "Organization {OrgId} provisioned with admin {UserId} ({Email}), userCreated={UserCreated}",
+                orgId,
+                adminUserId,
+                emailForStorage,
+                adminUserCreated);
+
+            return new ProvisionOrganizationResponse
+            {
+                OrganizationId = org.Id,
+                Name = org.Name,
+                Slug = org.Slug,
+                CreatedAt = org.CreatedAt,
+                AdminUserId = adminUserId,
+                AdminEmail = emailForStorage,
+                AdminFullName = resolvedFullName,
+                AdminUserCreated = adminUserCreated,
+                AdminRole = "owner"
+            };
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     public async Task<OrganizationResponse?> CreateOrganizationAsync(string name, string timezone, Guid ownerUserId, CancellationToken cancellationToken = default)
     {
         // Generate slug (kebab-case + uniqueness)
         var baseSlug = GenerateSlug(name);
-        var slug = await EnsureUniqueSlugAsync(baseSlug, cancellationToken);
+        var slug = await EnsureUniqueSlugAsync(baseSlug, transaction: null, cancellationToken);
 
         // Call repository transaction
         var orgId = await _orgRepository.CreateOrganizationAsync(name, slug, timezone, ownerUserId, cancellationToken: cancellationToken);
@@ -164,12 +253,12 @@ public class OrganizationsService : IOrganizationsService
         return slug;
     }
 
-    private async Task<string> EnsureUniqueSlugAsync(string baseSlug, CancellationToken cancellationToken)
+    private async Task<string> EnsureUniqueSlugAsync(string baseSlug, IDbTransaction? transaction, CancellationToken cancellationToken)
     {
         var slug = baseSlug;
         var counter = 1;
 
-        while (await SlugExistsAsync(slug, cancellationToken))
+        while (await SlugExistsAsync(slug, transaction, cancellationToken))
         {
             var suffix = $"-{counter}";
             var maxLength = 50 - suffix.Length;
@@ -192,7 +281,7 @@ public class OrganizationsService : IOrganizationsService
         return slug;
     }
 
-    private async Task<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken)
+    private async Task<bool> SlugExistsAsync(string slug, IDbTransaction? transaction, CancellationToken cancellationToken)
     {
         const string sql = @"
             SELECT COUNT(*)
@@ -200,12 +289,19 @@ public class OrganizationsService : IOrganizationsService
             WHERE slug = @Slug
               AND deleted_at IS NULL";
 
+        if (transaction != null)
+        {
+            var count = await transaction.Connection!.QuerySingleAsync<int>(
+                new CommandDefinition(sql, new { Slug = slug }, transaction, cancellationToken: cancellationToken));
+            return count > 0;
+        }
+
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
 
-        var count = await connection.QuerySingleAsync<int>(
+        var countWithoutTx = await connection.QuerySingleAsync<int>(
             new CommandDefinition(sql, new { Slug = slug }, cancellationToken: cancellationToken));
 
-        return count > 0;
+        return countWithoutTx > 0;
     }
 }

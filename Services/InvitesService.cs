@@ -81,9 +81,38 @@ public class InvitesService : IInvitesService
         };
     }
 
+    public async Task<IReadOnlyList<InviteResponse>> ListPendingInvitesAsync(
+        Guid orgId,
+        Guid requesterUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var membership = await _orgRepository.GetMembershipAsync(orgId, requesterUserId, cancellationToken);
+        if (membership is null)
+        {
+            _logger.LogWarning("User {UserId} attempted to list invites for org {OrgId} without membership", requesterUserId, orgId);
+            return [];
+        }
+
+        if (membership.Role is not ("owner" or "admin"))
+        {
+            _logger.LogWarning("User {UserId} attempted to list invites for org {OrgId} without owner/admin role", requesterUserId, orgId);
+            return [];
+        }
+
+        var invites = await _orgRepository.ListPendingInvitesByOrgAsync(orgId, cancellationToken);
+        return invites.Select(invite => new InviteResponse
+        {
+            InviteId = invite.Id,
+            Email = invite.Email,
+            Role = invite.Role,
+            ExpiresAt = invite.ExpiresAt,
+            CreatedAt = invite.CreatedAt,
+            Status = "pending"
+        }).ToList();
+    }
+
     public async Task<bool> AcceptInviteAsync(string token, CancellationToken cancellationToken = default)
     {
-        // Validate token
         var tokenHash = Sql.HashToken(token);
         var invite = await _orgRepository.GetInviteByTokenHashAsync(tokenHash, cancellationToken);
         if (invite == null)
@@ -92,17 +121,13 @@ public class InvitesService : IInvitesService
             return false;
         }
 
-        // Check if already accepted
         if (invite.AcceptedAt.HasValue)
         {
             _logger.LogWarning("Invite {InviteId} has already been accepted", invite.Id);
             return false;
         }
 
-        // Normalize email
         var normalizedEmail = invite.Email.ToLowerInvariant().Trim();
-
-        // Create user if not exists
         var user = await _authRepository.GetUserByEmailAsync(normalizedEmail, cancellationToken: cancellationToken);
         Guid userId;
 
@@ -121,31 +146,61 @@ public class InvitesService : IInvitesService
             userId = user.Id;
         }
 
-        // Check if user is disabled
         if (user.Status == "disabled")
         {
             _logger.LogWarning("Attempted invite acceptance by disabled user {UserId}", userId);
             return false;
         }
 
-        // Check if membership already exists
-        var existingMembership = await _orgRepository.GetMembershipAsync(invite.OrgId, userId, cancellationToken);
-        if (existingMembership != null && existingMembership.Status == "active")
+        return await ApplyInviteForUserAsync(userId, invite, cancellationToken);
+    }
+
+    public async Task<int> AcceptPendingInvitesForUserAsync(
+        Guid userId,
+        string email,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedEmail = email.ToLowerInvariant().Trim();
+        var pendingInvites = await _orgRepository.ListPendingInvitesByEmailAsync(normalizedEmail, cancellationToken);
+        if (pendingInvites.Count == 0)
+            return 0;
+
+        var accepted = 0;
+        foreach (var invite in pendingInvites)
         {
-            _logger.LogWarning("User {UserId} already has active membership in org {OrgId}", userId, invite.OrgId);
-            // Still mark invite as accepted
+            if (await ApplyInviteForUserAsync(userId, invite, cancellationToken))
+                accepted++;
+        }
+
+        return accepted;
+    }
+
+    private async Task<bool> ApplyInviteForUserAsync(
+        Guid userId,
+        InviteRecord invite,
+        CancellationToken cancellationToken)
+    {
+        if (invite.AcceptedAt.HasValue)
+            return false;
+
+        var existingMembership = await _orgRepository.GetMembershipAsync(invite.OrgId, userId, cancellationToken);
+        if (existingMembership is { Status: "active" })
+        {
             await _orgRepository.AcceptInviteAsync(invite.Id, cancellationToken: cancellationToken);
+            _logger.LogInformation(
+                "Marked invite {InviteId} accepted for user {UserId} already active in org {OrgId}",
+                invite.Id,
+                userId,
+                invite.OrgId);
             return true;
         }
 
-        // Create org_membership in a transaction
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
         using var transaction = connection.BeginTransaction();
 
         try
         {
-            // Create membership
             var membershipId = Guid.NewGuid();
             var now = Sql.UtcNow;
 
@@ -165,24 +220,26 @@ public class InvitesService : IInvitesService
                     CreatedAt = now
                 }, transaction, cancellationToken: cancellationToken));
 
-            // Mark invite accepted
-            var acceptedAt = Sql.UtcNow;
             const string sqlAccept = @"
                 UPDATE org_invites
                 SET accepted_at = @AcceptedAt
                 WHERE id = @InviteId";
 
             await connection.ExecuteAsync(
-                new CommandDefinition(sqlAccept, new { InviteId = invite.Id, AcceptedAt = acceptedAt }, transaction, cancellationToken: cancellationToken));
+                new CommandDefinition(sqlAccept, new { InviteId = invite.Id, AcceptedAt = now }, transaction, cancellationToken: cancellationToken));
 
             transaction.Commit();
-            _logger.LogInformation("Invite {InviteId} accepted, membership created for user {UserId} in org {OrgId}", invite.Id, userId, invite.OrgId);
+            _logger.LogInformation(
+                "Invite {InviteId} accepted, membership created for user {UserId} in org {OrgId}",
+                invite.Id,
+                userId,
+                invite.OrgId);
             return true;
         }
         catch (Exception ex)
         {
             transaction.Rollback();
-            _logger.LogError(ex, "Failed to accept invite {InviteId}", invite.Id);
+            _logger.LogError(ex, "Failed to accept invite {InviteId} for user {UserId}", invite.Id, userId);
             throw;
         }
     }
@@ -217,5 +274,27 @@ public class InvitesService : IInvitesService
         _logger.LogInformation("Invite {InviteId} resent. New token expires at {ExpiresAt}", inviteId, expiresAt);
 
         return true;
+    }
+
+    public async Task<bool> RevokeInviteAsync(Guid orgId, Guid requesterUserId, Guid inviteId, CancellationToken cancellationToken = default)
+    {
+        var membership = await _orgRepository.GetMembershipAsync(orgId, requesterUserId, cancellationToken);
+        if (membership is null)
+        {
+            _logger.LogWarning("User {UserId} attempted to revoke invite {InviteId} without membership", requesterUserId, inviteId);
+            return false;
+        }
+
+        if (membership.Role is not ("owner" or "admin"))
+        {
+            _logger.LogWarning("User {UserId} attempted to revoke invite {InviteId} without owner/admin role", requesterUserId, inviteId);
+            return false;
+        }
+
+        var revoked = await _orgRepository.RevokePendingInviteAsync(orgId, inviteId, cancellationToken);
+        if (revoked)
+            _logger.LogInformation("Invite {InviteId} revoked for org {OrgId}", inviteId, orgId);
+
+        return revoked;
     }
 }
