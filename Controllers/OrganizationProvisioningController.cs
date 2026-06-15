@@ -81,6 +81,53 @@ public class OrganizationProvisioningController : ControllerBase
         return Created($"/v1/orgs/{result.OrganizationId}", result);
     }
 
+    /// <summary>
+    /// Provisions a user into an existing organization (no end-user JWT required).
+    /// Protected by X-Api-Key (Provisioning:ApiKey).
+    /// </summary>
+    [HttpPost("{orgId:guid}/members/provision")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status201Created, Type = typeof(ProvisionOrganizationResponse))]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ProvisionOrganizationMember(
+        Guid orgId,
+        [FromBody] ProvisionOrganizationMemberRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!IsValidProvisioningApiKey())
+            return Unauthorized(new { error = "Invalid or missing provisioning API key" });
+
+        if (string.IsNullOrWhiteSpace(request.Email))
+            return BadRequest(new { error = "Email is required" });
+
+        if (string.IsNullOrWhiteSpace(request.Password))
+            return BadRequest(new { error = "Password is required" });
+
+        if (!TryNormalizeEmail(request.Email, out var email, out var emailError))
+            return BadRequest(new { error = emailError });
+
+        var passwordError = ValidatePasswordPolicy(request.Password);
+        if (passwordError is not null)
+            return BadRequest(new { error = passwordError });
+
+        var role = string.IsNullOrWhiteSpace(request.Role) ? "admin" : request.Role.Trim();
+
+        var result = await _organizationsService.ProvisionOrganizationMemberAsync(
+            orgId,
+            email,
+            request.FullName,
+            request.Password,
+            role,
+            cancellationToken);
+
+        if (result == null)
+            return BadRequest(new { error = "Failed to provision member. Organization may not exist or user is already a member." });
+
+        return Created($"/v1/orgs/{result.OrganizationId}/members/{result.AdminUserId}", result);
+    }
+
     private bool IsValidProvisioningApiKey()
     {
         var configuredKey = _configuration["Provisioning:ApiKey"];

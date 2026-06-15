@@ -132,6 +132,134 @@ public class OrganizationsService : IOrganizationsService
         }
     }
 
+    public async Task<ProvisionOrganizationResponse?> ProvisionOrganizationMemberAsync(
+        Guid orgId,
+        string email,
+        string? fullName,
+        string password,
+        string role = "admin",
+        CancellationToken cancellationToken = default)
+    {
+        var org = await _orgRepository.GetOrganizationAsync(orgId, cancellationToken);
+        if (org is null || !string.Equals(org.Status, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("Provision member blocked: org {OrgId} not found or inactive", orgId);
+            return null;
+        }
+
+        var normalizedRole = string.IsNullOrWhiteSpace(role) ? "admin" : role.Trim().ToLowerInvariant();
+        if (normalizedRole is not ("admin" or "member"))
+        {
+            _logger.LogWarning("Provision member blocked: invalid role {Role}", normalizedRole);
+            return null;
+        }
+
+        var normalizedEmail = email.ToLowerInvariant().Trim();
+        var emailForStorage = email.Trim();
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            var existingUser = await _authRepository.GetUserByEmailAsync(normalizedEmail, transaction, cancellationToken);
+            Guid userId;
+            var userCreated = false;
+            string? resolvedFullName;
+
+            if (existingUser == null)
+            {
+                userId = await _authRepository.CreateUserAsync(
+                    emailForStorage,
+                    string.IsNullOrWhiteSpace(fullName) ? null : fullName.Trim(),
+                    transaction,
+                    cancellationToken);
+                userCreated = true;
+                resolvedFullName = string.IsNullOrWhiteSpace(fullName) ? null : fullName.Trim();
+            }
+            else
+            {
+                if (existingUser.Status == "disabled")
+                {
+                    _logger.LogWarning("Provision member blocked: user {Email} is disabled", emailForStorage);
+                    return null;
+                }
+
+                userId = existingUser.Id;
+                resolvedFullName = existingUser.FullName ?? (string.IsNullOrWhiteSpace(fullName) ? null : fullName.Trim());
+            }
+
+            if (userCreated || string.IsNullOrWhiteSpace(existingUser?.PasswordHash))
+            {
+                var passwordHash = BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12);
+                await _authRepository.UpdatePasswordAsync(
+                    userId,
+                    passwordHash,
+                    DateTimeOffset.UtcNow,
+                    transaction,
+                    cancellationToken);
+            }
+
+            var existingMembership = await _orgRepository.GetMembershipAsync(orgId, userId, cancellationToken);
+            if (existingMembership is not null)
+            {
+                _logger.LogWarning(
+                    "Provision member blocked: user {UserId} is already a member of org {OrgId}",
+                    userId,
+                    orgId);
+                return null;
+            }
+
+            var membershipId = Guid.NewGuid();
+            var now = DateTimeOffset.UtcNow;
+
+            const string sqlMembership = @"
+                INSERT INTO org_memberships (id, org_id, user_id, role, status, joined_at, created_at)
+                VALUES (@Id, @OrgId, @UserId, @Role, @Status, @JoinedAt, @CreatedAt)";
+
+            await connection.ExecuteAsync(
+                new CommandDefinition(sqlMembership, new
+                {
+                    Id = membershipId,
+                    OrgId = orgId,
+                    UserId = userId,
+                    Role = normalizedRole,
+                    Status = "active",
+                    JoinedAt = now,
+                    CreatedAt = now
+                }, transaction, cancellationToken: cancellationToken));
+
+            transaction.Commit();
+
+            _logger.LogInformation(
+                "User {UserId} ({Email}) provisioned into org {OrgId} with role {Role}, userCreated={UserCreated}",
+                userId,
+                emailForStorage,
+                orgId,
+                normalizedRole,
+                userCreated);
+
+            return new ProvisionOrganizationResponse
+            {
+                OrganizationId = org.Id,
+                Name = org.Name,
+                Slug = org.Slug,
+                CreatedAt = org.CreatedAt,
+                AdminUserId = userId,
+                AdminEmail = emailForStorage,
+                AdminFullName = resolvedFullName,
+                AdminUserCreated = userCreated,
+                AdminRole = normalizedRole
+            };
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     public async Task<OrganizationResponse?> CreateOrganizationAsync(string name, string timezone, Guid ownerUserId, CancellationToken cancellationToken = default)
     {
         // Generate slug (kebab-case + uniqueness)
