@@ -30,6 +30,7 @@ public class OrganizationsService : IOrganizationsService
         string timezone,
         string adminEmail,
         string? adminFullName,
+        string? adminPassword = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedEmail = adminEmail.ToLowerInvariant().Trim();
@@ -66,6 +67,23 @@ public class OrganizationsService : IOrganizationsService
 
                 adminUserId = existingUser.Id;
                 resolvedFullName = existingUser.FullName ?? (string.IsNullOrWhiteSpace(adminFullName) ? null : adminFullName.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(adminPassword))
+            {
+                if (!adminUserCreated && !string.IsNullOrWhiteSpace(existingUser?.PasswordHash))
+                {
+                    _logger.LogWarning("Provision blocked: admin user {Email} already has a password", emailForStorage);
+                    return null;
+                }
+
+                var passwordHash = BCrypt.Net.BCrypt.HashPassword(adminPassword, workFactor: 12);
+                await _authRepository.UpdatePasswordAsync(
+                    adminUserId,
+                    passwordHash,
+                    DateTimeOffset.UtcNow,
+                    transaction,
+                    cancellationToken);
             }
 
             var baseSlug = GenerateSlug(name);

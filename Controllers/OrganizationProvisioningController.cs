@@ -56,6 +56,13 @@ public class OrganizationProvisioningController : ControllerBase
             return BadRequest(new { error = emailError });
         }
 
+        if (!string.IsNullOrWhiteSpace(request.AdminPassword))
+        {
+            var passwordError = ValidatePasswordPolicy(request.AdminPassword);
+            if (passwordError is not null)
+                return BadRequest(new { error = passwordError });
+        }
+
         var timezone = string.IsNullOrWhiteSpace(request.Timezone) ? "UTC" : request.Timezone.Trim();
 
         var result = await _organizationsService.ProvisionOrganizationAsync(
@@ -63,6 +70,7 @@ public class OrganizationProvisioningController : ControllerBase
             timezone,
             adminEmail,
             request.AdminFullName,
+            request.AdminPassword,
             cancellationToken);
 
         if (result == null)
@@ -113,5 +121,34 @@ public class OrganizationProvisioningController : ControllerBase
             error = "Invalid email format";
             return false;
         }
+    }
+
+    private static string? ValidatePasswordPolicy(string password)
+    {
+        if (string.IsNullOrWhiteSpace(password))
+            return "Password is required";
+
+        if (password.Length < 8)
+            return "Password must be at least 8 characters long";
+
+        var hasUpper = false;
+        var hasLower = false;
+        var hasNumber = false;
+
+        foreach (var c in password)
+        {
+            if (char.IsUpper(c)) hasUpper = true;
+            else if (char.IsLower(c)) hasLower = true;
+            else if (char.IsDigit(c)) hasNumber = true;
+        }
+
+        if (!hasUpper)
+            return "Password must contain at least one uppercase letter";
+        if (!hasLower)
+            return "Password must contain at least one lowercase letter";
+        if (!hasNumber)
+            return "Password must contain at least one number";
+
+        return null;
     }
 }

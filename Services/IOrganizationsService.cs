@@ -9,6 +9,7 @@ public interface IOrganizationsService
         string timezone,
         string adminEmail,
         string? adminFullName,
+        string? adminPassword = null,
         CancellationToken cancellationToken = default);
 
     Task<OrganizationResponse?> CreateOrganizationAsync(string name, string timezone, Guid ownerUserId, CancellationToken cancellationToken = default);
