@@ -204,11 +204,24 @@ public class OrganizationsService : IOrganizationsService
             var existingMembership = await _orgRepository.GetMembershipAsync(orgId, userId, cancellationToken);
             if (existingMembership is not null)
             {
-                _logger.LogWarning(
-                    "Provision member blocked: user {UserId} is already a member of org {OrgId}",
+                transaction.Rollback();
+                _logger.LogInformation(
+                    "Provision member idempotent: user {UserId} is already a member of org {OrgId}",
                     userId,
                     orgId);
-                return null;
+
+                return new ProvisionOrganizationResponse
+                {
+                    OrganizationId = org.Id,
+                    Name = org.Name,
+                    Slug = org.Slug,
+                    CreatedAt = org.CreatedAt,
+                    AdminUserId = userId,
+                    AdminEmail = emailForStorage,
+                    AdminFullName = resolvedFullName,
+                    AdminUserCreated = false,
+                    AdminRole = existingMembership.Role
+                };
             }
 
             var membershipId = Guid.NewGuid();

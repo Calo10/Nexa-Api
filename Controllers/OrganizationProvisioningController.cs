@@ -123,7 +123,7 @@ public class OrganizationProvisioningController : ControllerBase
             cancellationToken);
 
         if (result == null)
-            return BadRequest(new { error = "Failed to provision member. Organization may not exist or user is already a member." });
+            return BadRequest(new { error = "Organization not found or inactive." });
 
         return Created($"/v1/orgs/{result.OrganizationId}/members/{result.AdminUserId}", result);
     }
