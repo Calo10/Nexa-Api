@@ -9,6 +9,15 @@ public interface IOrganizationsService
         string timezone,
         string adminEmail,
         string? adminFullName,
+        string? adminPassword = null,
+        CancellationToken cancellationToken = default);
+
+    Task<ProvisionOrganizationResponse?> ProvisionOrganizationMemberAsync(
+        Guid orgId,
+        string email,
+        string? fullName,
+        string password,
+        string role = "admin",
         CancellationToken cancellationToken = default);
 
     Task<OrganizationResponse?> CreateOrganizationAsync(string name, string timezone, Guid ownerUserId, CancellationToken cancellationToken = default);
