@@ -3,6 +3,7 @@ using BCrypt.Net;
 using Microsoft.Extensions.Configuration;
 using NexaApi.Data;
 using NexaApi.DTOs.Auth;
+using NexaApi.Exceptions;
 
 namespace NexaApi.Services;
 
@@ -137,6 +138,8 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("User account is disabled"); // Will result in 403
         }
 
+        await EnsureSomeOrganizationAllowsLoginAsync(userId, cancellationToken);
+
         // Consume magic link
         await _authRepository.ConsumeMagicLinkAsync(magicLink.Id, cancellationToken: cancellationToken);
 
@@ -212,6 +215,7 @@ public class AuthService : IAuthService
         await _authRepository.ResetFailedLoginCountAsync(user.Id, cancellationToken: cancellationToken);
         _logger.LogInformation("Successful password login for user {UserId}", user.Id);
 
+        await EnsureSomeOrganizationAllowsLoginAsync(user.Id, cancellationToken);
         await TryAcceptPendingInvitesAsync(user.Id, user, cancellationToken);
 
         return await IssueAuthResponseAsync(user.Id, user, userAgent, ip, cancellationToken);
@@ -484,48 +488,108 @@ public class AuthService : IAuthService
         }
     }
 
-    private async Task<AuthResponse> IssueAuthResponseAsync(Guid userId, UserRecord user, string? userAgent, string? ip, CancellationToken cancellationToken)
+    private async Task EnsureSomeOrganizationAllowsLoginAsync(Guid userId, CancellationToken cancellationToken)
     {
-        // Determine org
-        var userMemberships = await _orgRepository.ListOrganizationsForUserAsync(userId, cancellationToken);
-        var firstUserMembership = userMemberships.FirstOrDefault();
+        var organizations = await _orgRepository.ListOrganizationsForUserAsync(userId, cancellationToken);
+        if (organizations.Count == 0)
+            return;
 
-        // Get membership details for first org
-        MembershipRecord? userMembership = null;
-        if (firstUserMembership != null)
+        var hasActiveOrganization = organizations.Any(org =>
+            !string.Equals(org.Status, "suspended", StringComparison.OrdinalIgnoreCase));
+        if (!hasActiveOrganization)
         {
-            userMembership = await _orgRepository.GetMembershipAsync(firstUserMembership.Id, userId, cancellationToken);
+            _logger.LogWarning("Login blocked because every organization for user {UserId} is suspended", userId);
+            throw new OrganizationSuspendedException();
         }
+    }
+
+    private async Task EnsureOrganizationAllowsLoginAsync(Guid userId, Guid? orgId, CancellationToken cancellationToken)
+    {
+        if (!orgId.HasValue)
+            return;
+
+        var org = await _orgRepository.GetOrganizationAsync(orgId.Value, cancellationToken);
+        if (org != null && string.Equals(org.Status, "suspended", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("Login blocked because organization {OrgId} for user {UserId} is suspended", org.Id, userId);
+            throw new OrganizationSuspendedException();
+        }
+    }
+
+    public async Task<AuthResponse?> SelectOrganizationAsync(
+        Guid userId,
+        Guid organizationId,
+        string? userAgent,
+        string? ip,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await _authRepository.GetUserByIdAsync(userId, cancellationToken: cancellationToken);
+        if (user == null || string.Equals(user.Status, "disabled", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var membership = await _orgRepository.GetMembershipAsync(organizationId, userId, cancellationToken);
+        if (membership == null)
+            return null;
+
+        return await IssueAuthResponseAsync(userId, user, userAgent, ip, cancellationToken, organizationId);
+    }
+
+    private async Task<AuthResponse> IssueAuthResponseAsync(
+        Guid userId,
+        UserRecord user,
+        string? userAgent,
+        string? ip,
+        CancellationToken cancellationToken,
+        Guid? selectedOrgId = null)
+    {
+        var userMemberships = await _orgRepository.ListOrganizationsForUserAsync(userId, cancellationToken);
+        var organizations = userMemberships
+            .Select(org => new LoginOrganizationOption
+            {
+                OrganizationId = org.Id,
+                Name = org.Name,
+                Slug = org.Slug,
+                Status = org.Status
+            })
+            .ToList();
+        var hasActiveOrganization = organizations.Any(org =>
+            !string.Equals(org.Status, "suspended", StringComparison.OrdinalIgnoreCase));
+        if (organizations.Count > 0 && !hasActiveOrganization)
+            throw new OrganizationSuspendedException();
+
+        var requiresOrgSelection = !selectedOrgId.HasValue && organizations.Count > 1 && hasActiveOrganization;
 
         Guid? orgId = null;
         Guid? membershipId = null;
         string? role = null;
         Dictionary<string, object>? features = null;
-        bool requiresOrgSetup = false;
+        var requiresOrgSetup = false;
         OrganizationInfo? orgInfo = null;
 
-        if (userMembership != null)
+        if (!requiresOrgSelection && organizations.Count > 0)
         {
-            orgId = userMembership.OrgId;
-            membershipId = userMembership.Id;
-            role = userMembership.Role;
-
-            // Resolve features if org exists
-            features = await _featuresService.GetResolvedFeaturesAsync(orgId.Value, cancellationToken);
-
-            // Get org info
-            var org = await _orgRepository.GetOrganizationAsync(orgId.Value, cancellationToken);
-            if (org != null)
+            var targetOrgId = selectedOrgId ?? userMemberships[0].Id;
+            await EnsureOrganizationAllowsLoginAsync(userId, targetOrgId, cancellationToken);
+            var userMembership = await _orgRepository.GetMembershipAsync(targetOrgId, userId, cancellationToken);
+            if (userMembership != null)
             {
-                orgInfo = new OrganizationInfo
+                orgId = userMembership.OrgId;
+                membershipId = userMembership.Id;
+                role = userMembership.Role;
+                features = await _featuresService.GetResolvedFeaturesAsync(orgId.Value, cancellationToken);
+                var org = await _orgRepository.GetOrganizationAsync(orgId.Value, cancellationToken);
+                if (org != null)
                 {
-                    OrganizationId = org.Id,
-                    Name = org.Name,
-                    Slug = org.Slug
-                };
+                    orgInfo = new OrganizationInfo
+                    {
+                        OrganizationId = org.Id,
+                        Name = org.Name,
+                        Slug = org.Slug
+                    };
+                }
             }
         }
-        else
+        else if (organizations.Count == 0)
         {
             requiresOrgSetup = true;
         }
@@ -570,7 +634,9 @@ public class AuthService : IAuthService
                 FullName = user.FullName
             },
             Organization = orgInfo,
-            Features = features
+            Features = features,
+            RequiresOrgSelection = requiresOrgSelection,
+            Organizations = organizations
         };
     }
 
@@ -591,6 +657,8 @@ public class AuthService : IAuthService
         // Note: We need to get user by ID, but repository only has GetUserByEmail
         // For now, we'll skip the disabled check here since we don't have a GetUserById method
         // This could be added to the repository if needed
+
+        await EnsureOrganizationAllowsLoginAsync(session.UserId, session.OrgId, cancellationToken);
 
         // Rotate refresh token
         var newRefreshToken = Sql.GenerateSecureToken();

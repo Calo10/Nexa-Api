@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NexaApi.DTOs.Auth;
+using NexaApi.Exceptions;
 using NexaApi.Services;
 using System.Security.Claims;
 
@@ -101,6 +102,10 @@ public class AuthController : ControllerBase
 
             return Ok(response);
         }
+        catch (OrganizationSuspendedException)
+        {
+            return AccountSuspended();
+        }
         catch (UnauthorizedAccessException ex)
         {
             return StatusCode(403, new { error = ex.Message });
@@ -139,9 +144,45 @@ public class AuthController : ControllerBase
 
             return Ok(response);
         }
+        catch (OrganizationSuspendedException)
+        {
+            return AccountSuspended();
+        }
         catch (UnauthorizedAccessException ex)
         {
             return StatusCode(403, new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("select-organization")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(AuthResponse))]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SelectOrganization([FromBody] SelectOrganizationRequest request, CancellationToken cancellationToken)
+    {
+        if (request.OrganizationId == Guid.Empty)
+            return BadRequest(new { error = "Organization is required" });
+
+        var userIdClaim = User.FindFirst("sub")?.Value ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { error = "Invalid user identity" });
+
+        var userAgent = Request.Headers["User-Agent"].ToString();
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+
+        try
+        {
+            var response = await _authService.SelectOrganizationAsync(userId, request.OrganizationId, userAgent, ip, cancellationToken);
+            if (response == null)
+                return NotFound(new { error = "Organization not found" });
+
+            return Ok(response);
+        }
+        catch (OrganizationSuspendedException)
+        {
+            return AccountSuspended();
         }
     }
 
@@ -176,6 +217,10 @@ public class AuthController : ControllerBase
 
             return Ok(response);
         }
+        catch (OrganizationSuspendedException)
+        {
+            return AccountSuspended();
+        }
         catch (UnauthorizedAccessException ex)
         {
             return StatusCode(403, new { error = ex.Message });
@@ -204,6 +249,10 @@ public class AuthController : ControllerBase
             }
 
             return Ok(response);
+        }
+        catch (OrganizationSuspendedException)
+        {
+            return AccountSuspended();
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -429,5 +478,14 @@ public class AuthController : ControllerBase
         }
 
         return Ok(userInfo);
+    }
+
+    private IActionResult AccountSuspended()
+    {
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = "This account is suspended. Please contact your administrator.",
+            code = OrganizationSuspendedException.ErrorCode
+        });
     }
 }
