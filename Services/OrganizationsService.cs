@@ -320,11 +320,18 @@ public class OrganizationsService : IOrganizationsService
                 Slug = org.Slug,
                 CreatedAt = org.CreatedAt,
                 Role = membership?.Role,
-                IsActive = org.Status == "active"
+                IsActive = org.Status == "active",
+                Status = org.Status
             });
         }
 
         return result;
+    }
+
+    public async Task<string?> GetOrganizationStatusAsync(Guid orgId, CancellationToken cancellationToken = default)
+    {
+        var org = await _orgRepository.GetOrganizationAsync(orgId, cancellationToken);
+        return org?.Status;
     }
 
     public async Task<OrganizationDetailResponse?> GetOrganizationAsync(Guid orgId, Guid userId, CancellationToken cancellationToken = default)

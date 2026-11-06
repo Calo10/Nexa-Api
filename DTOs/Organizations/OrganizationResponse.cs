@@ -8,5 +8,6 @@ public class OrganizationResponse
     public DateTimeOffset CreatedAt { get; set; }
     public string? Role { get; set; }
     public bool IsActive { get; set; }
+    public string Status { get; set; } = string.Empty;
 }
 

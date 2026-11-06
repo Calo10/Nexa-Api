@@ -10,6 +10,7 @@ public interface IAuthService
         CancellationToken cancellationToken = default);
     Task<AuthResponse?> ConsumeTokenAsync(string token, string? userAgent, string? ip, CancellationToken cancellationToken = default);
     Task<AuthResponse?> LoginWithPasswordAsync(string email, string password, string? userAgent, string? ip, CancellationToken cancellationToken = default);
+    Task<AuthResponse?> SelectOrganizationAsync(Guid userId, Guid organizationId, string? userAgent, string? ip, CancellationToken cancellationToken = default);
     Task SetPasswordAsync(Guid userId, string newPassword, CancellationToken cancellationToken = default);
     Task InitializePasswordAsync(Guid userId, string newPassword, CancellationToken cancellationToken = default);
     Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken = default);

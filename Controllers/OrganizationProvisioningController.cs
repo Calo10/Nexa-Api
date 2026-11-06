@@ -128,6 +128,27 @@ public class OrganizationProvisioningController : ControllerBase
         return Created($"/v1/orgs/{result.OrganizationId}/members/{result.AdminUserId}", result);
     }
 
+    /// <summary>
+    /// Organization account status for service callers (NextHire public jobs and login).
+    /// Protected by X-Api-Key (Provisioning:ApiKey).
+    /// </summary>
+    [HttpGet("{orgId:guid}/account-status")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAccountStatus(Guid orgId, CancellationToken cancellationToken)
+    {
+        if (!IsValidProvisioningApiKey())
+            return Unauthorized(new { error = "Invalid or missing provisioning API key" });
+
+        var status = await _organizationsService.GetOrganizationStatusAsync(orgId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(status))
+            return NotFound(new { error = "Organization not found" });
+
+        return Ok(new { status });
+    }
+
     private bool IsValidProvisioningApiKey()
     {
         var configuredKey = _configuration["Provisioning:ApiKey"];
